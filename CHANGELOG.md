@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Save persistence**:
+  - `save_program` bridge command persists pending edits without switching programs or analyzing
+  - `ghidra stop` now saves the current program before shutting the bridge down
+  - `ghidra batch <file>` saves the current program after the last command runs (previously edits only made it to disk on `analyze` or program-switch)
 - **Type system enhancements**:
   - `type delete` / `type rename` - CRUD completion for data types
   - `type create-enum` - Create enum types with `--values "KEY=VAL,..."` and `--size`

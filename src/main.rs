@@ -1015,9 +1015,15 @@ fn execute_via_bridge(
                 }
             }
 
+            // Persist any pending edits to disk. Without this, a `ghidra stop`
+            // after the batch is the only thing that flushes — and historically
+            // stop didn't save either, so type/field edits were silently lost.
+            let save_result = client.save_program(Some("ghidra-cli batch")).ok();
+
             Ok(json!({
                 "commands_parsed": lines.len(),
-                "results": results
+                "results": results,
+                "save": save_result,
             }))
         }
         Commands::Stats(_) => client.stats(),

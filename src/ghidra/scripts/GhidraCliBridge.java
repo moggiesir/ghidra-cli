@@ -169,8 +169,12 @@ public class GhidraCliBridge extends GhidraScript {
                 ? req.getAsJsonObject("args") : new JsonObject();
 
             if ("shutdown".equals(command)) {
+                String saveMsg = saveCurrentProgram("Save before shutdown");
                 JsonObject resp = new JsonObject();
                 resp.addProperty("status", "shutdown");
+                if (saveMsg != null) {
+                    resp.addProperty("save_warning", saveMsg);
+                }
                 return new HandleResult(resp, true);
             }
 
@@ -272,6 +276,8 @@ public class GhidraCliBridge extends GhidraScript {
             case "script_list":     return handleScriptList();
             // Batch
             case "batch":           return handleBatch(args);
+            // Persist current program changes to disk
+            case "save_program":    return handleSaveProgram(args);
             // Bridge info
             case "bridge_info":     return handleBridgeInfo();
             // Memory read
@@ -386,6 +392,20 @@ public class GhidraCliBridge extends GhidraScript {
     private boolean getArgBool(JsonObject args, String key, boolean defaultVal) {
         if (args == null || !args.has(key) || args.get(key).isJsonNull()) return defaultVal;
         return args.get(key).getAsBoolean();
+    }
+
+    // Persist any pending edits on the current program. Returns null on
+    // success or no-op (no program / not changed), or a short error message
+    // if the save attempt threw. Callers treat this as best-effort.
+    private String saveCurrentProgram(String reason) {
+        if (currentProgram == null) return null;
+        if (!currentProgram.isChanged()) return null;
+        try {
+            currentProgram.save(reason, new ConsoleTaskMonitor());
+            return null;
+        } catch (Exception e) {
+            return e.getMessage();
+        }
     }
 
     // --- Command Handlers (M1: Core) ---
@@ -3571,6 +3591,21 @@ public class GhidraCliBridge extends GhidraScript {
     private JsonObject handleBatch(JsonObject args) {
         // Batch operations are handled by the Rust side, not the bridge directly
         return errorResult("Batch operations are handled by the CLI, not via bridge script");
+    }
+
+    private JsonObject handleSaveProgram(JsonObject args) {
+        if (currentProgram == null) return errorResult("No program loaded");
+        String reason = getArgString(args, "reason");
+        if (reason == null || reason.isEmpty()) reason = "ghidra-cli save";
+        boolean wasChanged = currentProgram.isChanged();
+        String err = saveCurrentProgram(reason);
+        JsonObject result = new JsonObject();
+        result.addProperty("program", currentProgram.getName());
+        if (err != null) {
+            return errorResult("Save failed: " + err);
+        }
+        result.addProperty("status", wasChanged ? "saved" : "unchanged");
+        return result;
     }
 
     // --- Memory Read Handler ---

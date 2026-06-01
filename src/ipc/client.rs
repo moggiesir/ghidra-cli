@@ -92,6 +92,11 @@ impl BridgeClient {
         Ok(())
     }
 
+    /// Persist any pending changes to the current program.
+    pub fn save_program(&self, reason: Option<&str>) -> Result<serde_json::Value> {
+        self.send_command("save_program", Some(json!({"reason": reason})))
+    }
+
     /// Get bridge status.
     #[allow(dead_code)]
     pub fn status(&self) -> Result<serde_json::Value> {
