@@ -246,6 +246,83 @@ impl BridgeClient {
         )
     }
 
+    pub fn decompile_bulk(
+        &self,
+        filter: Option<&str>,
+        names: &[String],
+        addresses: &[String],
+        limit: Option<usize>,
+        timeout: usize,
+    ) -> Result<serde_json::Value> {
+        self.send_command(
+            "decompile_bulk",
+            Some(json!({
+                "filter": filter,
+                "names": names,
+                "addresses": addresses,
+                "limit": limit,
+                "timeout": timeout,
+            })),
+        )
+    }
+
+    pub fn equate_list(
+        &self,
+        limit: Option<usize>,
+        filter: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        self.send_command(
+            "equate_list",
+            Some(json!({"limit": limit, "filter": filter})),
+        )
+    }
+
+    pub fn data_list(
+        &self,
+        limit: Option<usize>,
+        filter: Option<&str>,
+        include_default: bool,
+        include_unnamed: bool,
+    ) -> Result<serde_json::Value> {
+        self.send_command(
+            "data_list",
+            Some(json!({
+                "limit": limit,
+                "filter": filter,
+                "include_default": include_default,
+                "include_unnamed": include_unnamed,
+            })),
+        )
+    }
+
+    pub fn data_read(
+        &self,
+        target: &str,
+        max_depth: Option<usize>,
+    ) -> Result<serde_json::Value> {
+        self.send_command(
+            "data_read",
+            Some(json!({
+                "target": target,
+                "max_depth": max_depth,
+            })),
+        )
+    }
+
+    pub fn data_set_type(
+        &self,
+        target: &str,
+        type_name: &str,
+    ) -> Result<serde_json::Value> {
+        self.send_command(
+            "data_set_type",
+            Some(json!({
+                "target": target,
+                "type": type_name,
+            })),
+        )
+    }
+
     pub fn comment_list(&self, limit: Option<usize>, filter: Option<&str>) -> Result<serde_json::Value> {
         self.send_command("comment_list", Some(json!({"limit": limit, "filter": filter})))
     }

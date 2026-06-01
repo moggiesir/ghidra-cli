@@ -108,6 +108,7 @@ fn requires_bridge(command: &Commands) -> bool {
             | Commands::Analyze(_)
             | Commands::Query(_)
             | Commands::Decompile(_)
+            | Commands::DecompileBulk(_)
             | Commands::Function(_)
             | Commands::Strings(_)
             | Commands::Memory(_)
@@ -116,6 +117,8 @@ fn requires_bridge(command: &Commands) -> bool {
             | Commands::XRef(_)
             | Commands::Symbol(_)
             | Commands::Type(_)
+            | Commands::Equate(_)
+            | Commands::DataCmd(_)
             | Commands::Comment(_)
             | Commands::Graph(_)
             | Commands::Find(_)
@@ -138,6 +141,7 @@ fn extract_project_from_command(command: &Commands) -> Option<String> {
         Commands::Query(args) => args.project.clone(),
         Commands::Summary(args) => args.options.project.clone(),
         Commands::Decompile(args) => args.options.project.clone(),
+        Commands::DecompileBulk(args) => args.options.project.clone(),
         Commands::Function(cmd) => match cmd {
             cli::FunctionCommands::List(opts) => opts.project.clone(),
             cli::FunctionCommands::Decompile(args) => args.options.project.clone(),
@@ -215,6 +219,14 @@ fn extract_project_from_command(command: &Commands) -> Option<String> {
             cli::TypeCommands::AddField(args) => args.project.clone(),
             cli::TypeCommands::DelField(args) => args.project.clone(),
         },
+        Commands::Equate(cmd) => match cmd {
+            cli::EquateCommands::List(opts) => opts.project.clone(),
+        },
+        Commands::DataCmd(cmd) => match cmd {
+            cli::DataCommands::List(args) => args.options.project.clone(),
+            cli::DataCommands::Read(args) => args.options.project.clone(),
+            cli::DataCommands::SetType(args) => args.options.project.clone(),
+        },
         Commands::Patch(cmd) => match cmd {
             cli::PatchCommands::Bytes(args) => args.project.clone(),
             cli::PatchCommands::Nop(args) => args.project.clone(),
@@ -253,6 +265,7 @@ fn extract_program_from_command(command: &Commands) -> Option<String> {
         Commands::Query(args) => args.program.clone(),
         Commands::Summary(args) => args.options.program.clone(),
         Commands::Decompile(args) => args.options.program.clone(),
+        Commands::DecompileBulk(args) => args.options.program.clone(),
         Commands::Function(cmd) => match cmd {
             cli::FunctionCommands::List(opts) => opts.program.clone(),
             cli::FunctionCommands::Decompile(args) => args.options.program.clone(),
@@ -330,6 +343,14 @@ fn extract_program_from_command(command: &Commands) -> Option<String> {
             cli::TypeCommands::AddField(args) => args.program.clone(),
             cli::TypeCommands::DelField(args) => args.program.clone(),
         },
+        Commands::Equate(cmd) => match cmd {
+            cli::EquateCommands::List(opts) => opts.program.clone(),
+        },
+        Commands::DataCmd(cmd) => match cmd {
+            cli::DataCommands::List(args) => args.options.program.clone(),
+            cli::DataCommands::Read(args) => args.options.program.clone(),
+            cli::DataCommands::SetType(args) => args.options.program.clone(),
+        },
         Commands::Patch(cmd) => match cmd {
             cli::PatchCommands::Bytes(args) => args.program.clone(),
             cli::PatchCommands::Nop(args) => args.program.clone(),
@@ -360,6 +381,7 @@ fn extract_query_options(command: &Commands) -> Option<QueryOptions> {
     match command {
         Commands::Summary(args) => Some(args.options.clone()),
         Commands::Decompile(args) => Some(args.options.clone()),
+        Commands::DecompileBulk(args) => Some(args.options.clone()),
         Commands::Disasm(args) => Some(args.options.clone()),
         Commands::Stats(args) => Some(args.options.clone()),
         Commands::Function(cmd) => match cmd {
@@ -403,6 +425,14 @@ fn extract_query_options(command: &Commands) -> Option<QueryOptions> {
             cli::TypeCommands::List(opts) => Some(opts.clone()),
             cli::TypeCommands::Get(args) => Some(args.options.clone()),
             _ => None,
+        },
+        Commands::Equate(cmd) => match cmd {
+            cli::EquateCommands::List(opts) => Some(opts.clone()),
+        },
+        Commands::DataCmd(cmd) => match cmd {
+            cli::DataCommands::List(args) => Some(args.options.clone()),
+            cli::DataCommands::Read(args) => Some(args.options.clone()),
+            cli::DataCommands::SetType(args) => Some(args.options.clone()),
         },
         Commands::Comment(cmd) => match cmd {
             cli::CommentCommands::List(opts) => Some(opts.clone()),
@@ -704,6 +734,13 @@ fn execute_via_bridge(
             args.with_vars,
             args.with_params,
         ),
+        Commands::DecompileBulk(args) => client.decompile_bulk(
+            args.options.filter.as_deref(),
+            &args.names,
+            &args.addresses,
+            args.options.limit.or(default_limit),
+            args.timeout,
+        ),
         Commands::Function(cmd) => {
             use cli::FunctionCommands;
             match cmd {
@@ -920,6 +957,33 @@ fn execute_via_bridge(
                         "type_name": args.type_name,
                         "field_name": args.name,
                     })),
+                ),
+            }
+        }
+        Commands::Equate(cmd) => {
+            use cli::EquateCommands;
+            match cmd {
+                EquateCommands::List(opts) => {
+                    client.equate_list(opts.limit.or(default_limit), opts.filter.as_deref())
+                }
+            }
+        }
+        Commands::DataCmd(cmd) => {
+            use cli::DataCommands;
+            match cmd {
+                DataCommands::List(args) => client.data_list(
+                    args.options.limit.or(default_limit),
+                    args.options.filter.as_deref(),
+                    args.include_default,
+                    args.include_unnamed,
+                ),
+                DataCommands::Read(args) => client.data_read(
+                    &args.target,
+                    Some(args.max_depth),
+                ),
+                DataCommands::SetType(args) => client.data_set_type(
+                    &args.target,
+                    &args.type_name,
                 ),
             }
         }

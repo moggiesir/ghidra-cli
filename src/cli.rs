@@ -27,9 +27,39 @@ fn parse_i32_with_radix(raw: &str) -> Result<i32, String> {
     i32::try_from(signed).map_err(|_| format!("value `{}` out of range for i32", raw))
 }
 
+const CLI_AFTER_HELP: &str = "\
+COMMON COMMANDS:
+    decompile <name|addr>            Decompile one function
+    decompile-bulk --filter <substr> Decompile many in one bridge round-trip
+    function list --filter <substr>  List functions by name substring
+    function set-signature <name> --signature \"...\"
+    type list / type get / type create / type add-field
+    equate list                      Named scalar values applied to operands
+    data list                        Labeled globals/tables (user-typed by default)
+    x-ref to <addr|name>             Cross-references to an address
+    batch <file>                     Run many CLI commands in one transaction
+
+NOTES:
+    --filter is a case-insensitive substring match on the primary name field.
+    The richer grammar in src/filter.pest is parsed but not honored by list
+    commands.
+
+    List commands default to --limit 1000. Pass --limit 0 for unlimited.
+
+    The bridge auto-starts on first use (~25s cold). After rebuilding the
+    Java bridge, run `ghidra restart` to pick up changes.
+
+    Add --json for machine output, --pretty for indented JSON. JSON
+    responses are wrapped in a one-element array.
+
+If you're in a project that has tools/ghidra/README.md, that file has the
+project-specific command catalog and conventions.
+";
+
 #[derive(Parser)]
 #[command(name = "ghidra")]
 #[command(version, about = "Rust CLI for Ghidra reverse engineering", long_about = None)]
+#[command(after_help = CLI_AFTER_HELP)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -93,6 +123,14 @@ pub enum Commands {
     #[command(subcommand, alias = "types")]
     Type(TypeCommands),
 
+    /// Equate (named scalar value) operations
+    #[command(subcommand, alias = "equates", alias = "eq")]
+    Equate(EquateCommands),
+
+    /// Defined data (labeled globals/tables) operations
+    #[command(name = "data", subcommand)]
+    DataCmd(DataCommands),
+
     /// Comment operations
     #[command(subcommand, alias = "comments")]
     Comment(CommentCommands),
@@ -108,6 +146,16 @@ pub enum Commands {
     /// Decompile function
     #[command(alias = "decomp", alias = "dec")]
     Decompile(DecompileArgs),
+
+    /// Decompile many functions in one bridge round-trip
+    ///
+    /// Selectors (combine freely; results are deduped by entry point):
+    ///   --filter <substr>     : function-name substring match
+    ///   --name <name>         : explicit name (repeatable)
+    ///   --address <addr>      : explicit entry-point address (repeatable)
+    /// With no selector, decompiles every function in the program.
+    #[command(alias = "decomp-bulk", alias = "dec-bulk")]
+    DecompileBulk(DecompileBulkArgs),
 
     /// Disassemble code
     #[command(alias = "disassemble", alias = "dis")]
@@ -345,7 +393,6 @@ pub enum FunctionCommands {
     /// Set function calling convention
     SetCallingConvention(SetCallingConventionArgs),
     /// Set variable type in a function
-    #[command(alias = "set-var-type")]
     SetVarType(SetVarTypeArgs),
 }
 
@@ -571,6 +618,68 @@ pub struct CreateSymbolArgs {
     pub program: Option<String>,
     #[arg(long)]
     pub project: Option<String>,
+}
+
+#[derive(Subcommand, Clone, Serialize, Deserialize, Debug)]
+pub enum EquateCommands {
+    /// List all equates (named scalar values applied to operands)
+    #[command(alias = "ls")]
+    List(QueryOptions),
+}
+
+#[derive(Subcommand, Clone, Serialize, Deserialize, Debug)]
+pub enum DataCommands {
+    /// List defined data items (labeled globals, tables, constants)
+    ///
+    /// By default only items with a user-assigned name AND a non-default
+    /// data type are returned — i.e. things you intentionally typed in
+    /// Ghidra. Use --include-default / --include-unnamed to widen.
+    #[command(alias = "ls")]
+    List(DataListArgs),
+    /// Read the structured value of a data item (expands structs/arrays)
+    Read(DataReadArgs),
+    /// Set the data type of a global/label at an address
+    SetType(DataSetTypeArgs),
+}
+
+#[derive(Args, Clone, Serialize, Deserialize, Debug)]
+pub struct DataListArgs {
+    /// Include items whose data type is undefined / default
+    #[arg(long)]
+    pub include_default: bool,
+
+    /// Include items with auto-generated names (DAT_*, LAB_*) or no symbol
+    #[arg(long)]
+    pub include_unnamed: bool,
+
+    #[command(flatten)]
+    pub options: QueryOptions,
+}
+
+#[derive(Args, Clone, Serialize, Deserialize, Debug)]
+pub struct DataReadArgs {
+    /// Name or address of the data item
+    pub target: String,
+
+    /// Max recursion depth for nested structs/arrays (default 4)
+    #[arg(long, default_value_t = 4)]
+    pub max_depth: usize,
+
+    #[command(flatten)]
+    pub options: QueryOptions,
+}
+
+#[derive(Args, Clone, Serialize, Deserialize, Debug)]
+pub struct DataSetTypeArgs {
+    /// Name or address of the data item
+    pub target: String,
+
+    /// Type to apply (e.g. "MapUvCornerTable", "ushort[64]", "int")
+    #[arg(long = "type")]
+    pub type_name: String,
+
+    #[command(flatten)]
+    pub options: QueryOptions,
 }
 
 #[derive(Subcommand, Clone, Serialize, Deserialize, Debug)]
@@ -945,6 +1054,24 @@ impl DecompileArgs {
             .or(self.positional_target.as_deref())
             .expect("clap should ensure target is provided")
     }
+}
+
+#[derive(Args, Clone, Serialize, Deserialize, Debug)]
+pub struct DecompileBulkArgs {
+    /// Explicit function name (repeatable)
+    #[arg(long = "name", value_name = "NAME")]
+    pub names: Vec<String>,
+
+    /// Explicit entry-point address (repeatable, e.g. 0x00401000 or FUN_00401000)
+    #[arg(long = "address", value_name = "ADDR")]
+    pub addresses: Vec<String>,
+
+    /// Per-function decompile timeout in seconds
+    #[arg(long, default_value = "30")]
+    pub timeout: usize,
+
+    #[command(flatten)]
+    pub options: QueryOptions,
 }
 
 #[derive(Args, Clone, Serialize, Deserialize, Debug)]

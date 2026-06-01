@@ -282,6 +282,12 @@ public class GhidraCliBridge extends GhidraScript {
             case "bridge_info":     return handleBridgeInfo();
             // Memory read
             case "read_memory":     return handleReadMemory(args);
+            // Equate / defined-data export support
+            case "equate_list":     return handleEquateList(args);
+            case "data_list":       return handleDataList(args);
+            case "data_read":       return handleDataRead(args);
+            case "data_set_type":   return handleDataSetType(args);
+            case "decompile_bulk":  return handleDecompileBulk(args);
             default:                return null;
         }
     }
@@ -3717,5 +3723,426 @@ public class GhidraCliBridge extends GhidraScript {
         } catch (Exception e) {
             return errorResult("Failed to read memory: " + e.getMessage());
         }
+    }
+
+    // --- Equate / Defined-Data Handlers (export support) ---
+
+    /**
+     * List every equate in the program. Each entry includes its name, value,
+     * and the operand sites where it is applied.
+     *
+     * Args:
+     *   limit   (int, optional)    — cap result count, 0 = unlimited
+     *   filter  (string, optional) — case-insensitive substring on equate name
+     *
+     * Result:
+     *   { equates: [{name, value, hex, addrs:[{address, op_index}]}], count }
+     */
+    private JsonObject handleEquateList(JsonObject args) {
+        if (currentProgram == null) return errorResult("No program loaded");
+
+        int limit = getArgInt(args, "limit", 0);
+        String nameFilter = getArgString(args, "filter");
+
+        EquateTable et = currentProgram.getEquateTable();
+        JsonArray equates = new JsonArray();
+        int count = 0;
+
+        Iterator<Equate> it = et.getEquates();
+        while (it.hasNext()) {
+            if (limit > 0 && count >= limit) break;
+            Equate eq = it.next();
+            String name = eq.getName();
+
+            if (nameFilter != null && !name.toLowerCase().contains(nameFilter.toLowerCase())) {
+                continue;
+            }
+
+            JsonObject obj = new JsonObject();
+            obj.addProperty("name", name);
+            obj.addProperty("value", eq.getValue());
+            obj.addProperty("hex", String.format("0x%x", eq.getValue()));
+
+            JsonArray addrs = new JsonArray();
+            for (EquateReference ref : eq.getReferences()) {
+                JsonObject refObj = new JsonObject();
+                refObj.addProperty("address", ref.getAddress().toString());
+                refObj.addProperty("op_index", ref.getOpIndex());
+                addrs.add(refObj);
+            }
+            obj.add("addrs", addrs);
+            equates.add(obj);
+            count++;
+        }
+
+        JsonObject result = new JsonObject();
+        result.add("equates", equates);
+        result.addProperty("count", equates.size());
+        return result;
+    }
+
+    /**
+     * List defined data items in the program. Intended for export of named
+     * globals / static const tables to C.
+     *
+     * Args:
+     *   limit             (int, optional)    — cap result count, 0 = unlimited
+     *   filter            (string, optional) — case-insensitive substring on symbol name
+     *   include_default   (bool, optional)   — include items whose data type is
+     *                                          undefined / default (default false)
+     *   include_unnamed   (bool, optional)   — include items whose primary symbol
+     *                                          is auto-generated (DAT_*, LAB_*) or
+     *                                          missing entirely (default false)
+     *
+     * Result:
+     *   { data: [{name, address, type, size, value, source, default_type, default_name}], count }
+     */
+    private JsonObject handleDataList(JsonObject args) {
+        if (currentProgram == null) return errorResult("No program loaded");
+
+        int limit = getArgInt(args, "limit", 0);
+        String nameFilter = getArgString(args, "filter");
+        boolean includeDefault = getArgBool(args, "include_default", false);
+        boolean includeUnnamed = getArgBool(args, "include_unnamed", false);
+
+        Listing listing = currentProgram.getListing();
+        JsonArray dataArr = new JsonArray();
+        int count = 0;
+
+        Iterator<Data> it = listing.getDefinedData(true);
+        while (it.hasNext()) {
+            if (limit > 0 && count >= limit) break;
+            Data d = it.next();
+            DataType dt = d.getDataType();
+
+            boolean isDefaultType =
+                dt instanceof Undefined ||
+                dt instanceof DefaultDataType;
+
+            if (!includeDefault && isDefaultType) continue;
+
+            Symbol sym = d.getPrimarySymbol();
+            boolean hasUserName = sym != null && sym.getSource() != SourceType.DEFAULT;
+
+            if (!includeUnnamed && !hasUserName) continue;
+
+            String name = sym != null ? sym.getName() : null;
+            if (nameFilter != null && (name == null
+                || !name.toLowerCase().contains(nameFilter.toLowerCase()))) {
+                continue;
+            }
+
+            JsonObject obj = new JsonObject();
+            obj.addProperty("name", name);
+            obj.addProperty("address", d.getAddress().toString());
+            obj.addProperty("type", dt.getName());
+            obj.addProperty("size", d.getLength());
+            try {
+                obj.addProperty("value", d.getDefaultValueRepresentation());
+            } catch (Exception e) {
+                obj.addProperty("value", (String) null);
+            }
+            obj.addProperty("source", sym != null ? sym.getSource().toString() : "NONE");
+            obj.addProperty("default_type", isDefaultType);
+            obj.addProperty("default_name", !hasUserName);
+            dataArr.add(obj);
+            count++;
+        }
+
+        JsonObject result = new JsonObject();
+        result.add("data", dataArr);
+        result.addProperty("count", dataArr.size());
+        return result;
+    }
+
+    private JsonObject handleDataRead(JsonObject args) {
+        if (currentProgram == null) return errorResult("No program loaded");
+
+        String target = getArgString(args, "target");
+        if (target == null || target.isEmpty()) return errorResult("Missing 'target' (name or address)");
+
+        Address addr = resolveAddress(target);
+        if (addr == null) return errorResult("Cannot resolve: " + target);
+
+        Listing listing = currentProgram.getListing();
+        Data d = listing.getDefinedDataAt(addr);
+        if (d == null) {
+            d = listing.getDataAt(addr);
+        }
+        if (d == null) return errorResult("No defined data at " + addr);
+
+        int maxDepth = getArgInt(args, "max_depth", 4);
+
+        JsonObject result = new JsonObject();
+        Symbol sym = d.getPrimarySymbol();
+        result.addProperty("name", sym != null ? sym.getName() : null);
+        result.addProperty("address", addr.toString());
+        result.addProperty("type", d.getDataType().getName());
+        result.addProperty("size", d.getLength());
+        result.add("value", formatDataValue(d, maxDepth));
+        return result;
+    }
+
+    private JsonObject handleDataSetType(JsonObject args) {
+        if (currentProgram == null) return errorResult("No program loaded");
+
+        String target = getArgString(args, "target");
+        if (target == null || target.isEmpty()) return errorResult("Missing 'target' (name or address)");
+
+        String typeName = getArgString(args, "type");
+        if (typeName == null || typeName.isEmpty()) return errorResult("Missing 'type'");
+
+        Address addr = resolveAddress(target);
+        if (addr == null) return errorResult("Cannot resolve: " + target);
+
+        DataType dataType = resolveDataType(typeName);
+        if (dataType == null) return errorResult("Unknown type: " + typeName);
+
+        try {
+            Listing listing = currentProgram.getListing();
+            int tid = currentProgram.startTransaction("data_set_type");
+            try {
+                listing.clearCodeUnits(addr, addr.add(dataType.getLength() - 1), false);
+                listing.createData(addr, dataType);
+            } finally {
+                currentProgram.endTransaction(tid, true);
+            }
+            JsonObject result = new JsonObject();
+            result.addProperty("address", addr.toString());
+            result.addProperty("type", dataType.getName());
+            result.addProperty("size", dataType.getLength());
+            result.addProperty("status", "applied");
+            return result;
+        } catch (Exception e) {
+            return errorResult("Failed to set type: " + e.getMessage());
+        }
+    }
+
+    private JsonElement formatDataValue(Data d, int depth) {
+        if (depth <= 0) {
+            return new JsonPrimitive("...");
+        }
+
+        DataType dt = d.getBaseDataType();
+        int numComponents = d.getNumComponents();
+
+        if (numComponents > 0) {
+            DataType parentBase = d.getDataType();
+            if (parentBase instanceof Array) {
+                JsonArray arr = new JsonArray();
+                for (int i = 0; i < numComponents; i++) {
+                    arr.add(formatDataValue(d.getComponent(i), depth - 1));
+                }
+                return arr;
+            } else {
+                JsonObject obj = new JsonObject();
+                for (int i = 0; i < numComponents; i++) {
+                    Data comp = d.getComponent(i);
+                    String fieldName = comp.getFieldName();
+                    if (fieldName == null || fieldName.isEmpty()) {
+                        fieldName = "field_" + i;
+                    }
+                    obj.add(fieldName, formatDataValue(comp, depth - 1));
+                }
+                return obj;
+            }
+        }
+
+        if (dt instanceof Pointer) {
+            Object val = d.getValue();
+            if (val instanceof Address) {
+                Address ptrAddr = (Address) val;
+                long offset = ptrAddr.getOffset();
+                if (offset == 0) {
+                    return new JsonPrimitive("NULL");
+                }
+                Function func = currentProgram.getFunctionManager().getFunctionAt(ptrAddr);
+                if (func != null) {
+                    return new JsonPrimitive(func.getName());
+                }
+                Symbol sym = currentProgram.getSymbolTable().getPrimarySymbol(ptrAddr);
+                if (sym != null && sym.getSource() != SourceType.DEFAULT) {
+                    return new JsonPrimitive(sym.getName());
+                }
+                return new JsonPrimitive(String.format("0x%08x", offset));
+            }
+        }
+
+        try {
+            Object val = d.getValue();
+            if (val instanceof ghidra.program.model.scalar.Scalar) {
+                long v = ((ghidra.program.model.scalar.Scalar) val).getUnsignedValue();
+                if (d.getLength() <= 4) {
+                    return new JsonPrimitive(String.format("0x%0" + (d.getLength() * 2) + "x", v));
+                }
+                return new JsonPrimitive(String.format("0x%x", v));
+            }
+            if (val != null) {
+                return new JsonPrimitive(val.toString());
+            }
+        } catch (Exception e) {
+            // fall through
+        }
+
+        String repr = d.getDefaultValueRepresentation();
+        if (repr != null && !repr.isEmpty()) {
+            return new JsonPrimitive(repr);
+        }
+        return JsonNull.INSTANCE;
+    }
+
+    /**
+     * Decompile many functions in a single call. Reuses one DecompInterface
+     * across all functions, so this is dramatically faster than calling
+     * `decompile` once per function over TCP.
+     *
+     * Args (all optional, but at least one selector required):
+     *   filter    (string)  — substring filter on function name (case-insensitive)
+     *   names     (array)   — explicit function name list
+     *   addresses (array)   — explicit entry-point addresses
+     *   limit     (int)     — cap result count after selection (0 = unlimited)
+     *   timeout   (int)     — per-function decompile timeout in seconds (default 30)
+     *
+     * If multiple selectors are provided, the result is the union (deduped by
+     * entry point). If no selector is provided, ALL functions are decompiled.
+     *
+     * Result:
+     *   { results: [{name, address, code, error}], count, failed }
+     *
+     * `error` is set instead of `code` when the per-function decompile fails or
+     * the function can't be resolved.
+     */
+    private JsonObject handleDecompileBulk(JsonObject args) {
+        if (currentProgram == null) return errorResult("No program loaded");
+
+        int limit = getArgInt(args, "limit", 0);
+        int timeoutSec = getArgInt(args, "timeout", 30);
+        String nameFilter = getArgString(args, "filter");
+
+        // Collect explicit name list
+        List<String> explicitNames = new ArrayList<>();
+        if (args != null && args.has("names") && args.get("names").isJsonArray()) {
+            for (JsonElement el : args.getAsJsonArray("names")) {
+                if (!el.isJsonNull()) explicitNames.add(el.getAsString());
+            }
+        }
+
+        // Collect explicit address list
+        List<String> explicitAddrs = new ArrayList<>();
+        if (args != null && args.has("addresses") && args.get("addresses").isJsonArray()) {
+            for (JsonElement el : args.getAsJsonArray("addresses")) {
+                if (!el.isJsonNull()) explicitAddrs.add(el.getAsString());
+            }
+        }
+
+        boolean hasSelector = nameFilter != null
+            || !explicitNames.isEmpty()
+            || !explicitAddrs.isEmpty();
+
+        FunctionManager fm = currentProgram.getFunctionManager();
+        SymbolTable symTab = currentProgram.getSymbolTable();
+
+        // Build target list (deduped by entry address)
+        java.util.LinkedHashMap<String, Function> targets = new java.util.LinkedHashMap<>();
+        java.util.List<String> resolutionErrors = new ArrayList<>();
+
+        if (!hasSelector) {
+            FunctionIterator it = fm.getFunctions(true);
+            while (it.hasNext()) {
+                Function f = it.next();
+                targets.put(f.getEntryPoint().toString(), f);
+                if (limit > 0 && targets.size() >= limit) break;
+            }
+        } else {
+            if (nameFilter != null) {
+                String needle = nameFilter.toLowerCase();
+                FunctionIterator it = fm.getFunctions(true);
+                while (it.hasNext()) {
+                    Function f = it.next();
+                    if (f.getName().toLowerCase().contains(needle)) {
+                        targets.put(f.getEntryPoint().toString(), f);
+                    }
+                }
+            }
+            for (String name : explicitNames) {
+                boolean matched = false;
+                SymbolIterator syms = symTab.getSymbols(name);
+                while (syms.hasNext()) {
+                    Symbol s = syms.next();
+                    Function f = fm.getFunctionAt(s.getAddress());
+                    if (f != null) {
+                        targets.put(f.getEntryPoint().toString(), f);
+                        matched = true;
+                    }
+                }
+                if (!matched) resolutionErrors.add("name not found: " + name);
+            }
+            for (String addrStr : explicitAddrs) {
+                Address addr = resolveAddress(addrStr);
+                Function f = (addr != null) ? fm.getFunctionContaining(addr) : null;
+                if (f != null) {
+                    targets.put(f.getEntryPoint().toString(), f);
+                } else {
+                    resolutionErrors.add("address not resolved: " + addrStr);
+                }
+            }
+        }
+
+        // Apply limit if a selector is in play
+        if (limit > 0 && targets.size() > limit) {
+            java.util.LinkedHashMap<String, Function> trimmed = new java.util.LinkedHashMap<>();
+            int kept = 0;
+            for (java.util.Map.Entry<String, Function> e : targets.entrySet()) {
+                trimmed.put(e.getKey(), e.getValue());
+                if (++kept >= limit) break;
+            }
+            targets = trimmed;
+        }
+
+        // Decompile (single shared DecompInterface).
+        DecompInterface decompiler = new DecompInterface();
+        JsonArray results = new JsonArray();
+        int failed = 0;
+        try {
+            decompiler.openProgram(currentProgram);
+            TaskMonitor mon = new ConsoleTaskMonitor();
+
+            for (Function func : targets.values()) {
+                JsonObject row = new JsonObject();
+                row.addProperty("name", func.getName());
+                row.addProperty("address", func.getEntryPoint().toString());
+                try {
+                    DecompileResults res = decompiler.decompileFunction(func, timeoutSec, mon);
+                    if (res != null && res.decompileCompleted()
+                            && res.getDecompiledFunction() != null) {
+                        row.addProperty("code", res.getDecompiledFunction().getC());
+                    } else {
+                        String msg = (res != null && res.getErrorMessage() != null
+                            && !res.getErrorMessage().isEmpty())
+                            ? res.getErrorMessage()
+                            : "decompile did not complete";
+                        row.addProperty("error", msg);
+                        failed++;
+                    }
+                } catch (Exception e) {
+                    row.addProperty("error", e.getMessage());
+                    failed++;
+                }
+                results.add(row);
+            }
+        } finally {
+            decompiler.dispose();
+        }
+
+        JsonObject result = new JsonObject();
+        result.add("results", results);
+        result.addProperty("count", results.size());
+        result.addProperty("failed", failed);
+        if (!resolutionErrors.isEmpty()) {
+            JsonArray errs = new JsonArray();
+            for (String s : resolutionErrors) errs.add(s);
+            result.add("resolution_errors", errs);
+        }
+        return result;
     }
 }
