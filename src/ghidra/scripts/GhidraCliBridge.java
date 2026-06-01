@@ -2313,11 +2313,52 @@ public class GhidraCliBridge extends GhidraScript {
             DataType c = iter.next();
             if (c.getName().equals(name)) return c;
         }
+        // Fall through to BuiltInDataTypeManager. The program DTM only
+        // surfaces built-ins that have been referenced; primitives like
+        // `short`, `long`, `int8`, `int16`, `byte`, etc. don't appear in
+        // getAllDataTypes() until something uses them. Pulling from the
+        // built-in manager and resolving back into the program DTM makes
+        // those names work the first time too.
+        DataType builtIn = resolveBuiltIn(name, dtm);
+        if (builtIn != null) return builtIn;
+        // Handle array syntax: "byte[16]" or "uint[3]"
+        if (name.endsWith("]")) {
+            int bracket = name.lastIndexOf('[');
+            if (bracket > 0) {
+                String base = name.substring(0, bracket).trim();
+                String countStr = name.substring(bracket + 1, name.length() - 1).trim();
+                try {
+                    int count = Integer.parseInt(countStr);
+                    DataType baseType = resolveDataType(base);
+                    if (baseType != null) return new ArrayDataType(baseType, count, baseType.getLength());
+                } catch (NumberFormatException e) { /* fall through */ }
+            }
+        }
         // Handle pointer syntax: "int *" or "char **"
         if (name.endsWith("*")) {
             String base = name.substring(0, name.lastIndexOf('*')).trim();
             DataType baseType = resolveDataType(base);
             if (baseType != null) return new PointerDataType(baseType);
+        }
+        return null;
+    }
+
+    private DataType resolveBuiltIn(String name, DataTypeManager dtm) {
+        try {
+            BuiltInDataTypeManager builtInDtm = BuiltInDataTypeManager.getDataTypeManager();
+            DataType bt = builtInDtm.getDataType("/" + name);
+            if (bt == null) {
+                Iterator<DataType> bi = builtInDtm.getAllDataTypes();
+                while (bi.hasNext()) {
+                    DataType c = bi.next();
+                    if (c.getName().equals(name)) { bt = c; break; }
+                }
+            }
+            if (bt != null) {
+                return dtm.resolve(bt, null);
+            }
+        } catch (Throwable t) {
+            // Fall through — built-in lookup is best-effort.
         }
         return null;
     }

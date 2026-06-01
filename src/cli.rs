@@ -1,6 +1,32 @@
 use clap::{ArgAction, Args, Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 
+/// Parse a signed integer that may be written in decimal (`16`, `-4`),
+/// hex (`0x10`, `0X10`), binary (`0b1000`), or octal (`0o20`).
+///
+/// Ghidra struct offsets are conventionally written in hex; the CLI used to
+/// require decimal which forced manual conversion at every callsite.
+fn parse_i32_with_radix(raw: &str) -> Result<i32, String> {
+    let s = raw.trim();
+    let (negative, rest) = match s.strip_prefix('-') {
+        Some(r) => (true, r),
+        None => (false, s.strip_prefix('+').unwrap_or(s)),
+    };
+    let (radix, digits) = if let Some(d) = rest.strip_prefix("0x").or_else(|| rest.strip_prefix("0X")) {
+        (16, d)
+    } else if let Some(d) = rest.strip_prefix("0b").or_else(|| rest.strip_prefix("0B")) {
+        (2, d)
+    } else if let Some(d) = rest.strip_prefix("0o").or_else(|| rest.strip_prefix("0O")) {
+        (8, d)
+    } else {
+        (10, rest)
+    };
+    let magnitude = i64::from_str_radix(digits, radix)
+        .map_err(|e| format!("invalid integer `{}`: {}", raw, e))?;
+    let signed = if negative { -magnitude } else { magnitude };
+    i32::try_from(signed).map_err(|_| format!("value `{}` out of range for i32", raw))
+}
+
 #[derive(Parser)]
 #[command(name = "ghidra")]
 #[command(version, about = "Rust CLI for Ghidra reverse engineering", long_about = None)]
@@ -728,11 +754,12 @@ pub struct TypeAddFieldArgs {
     /// Field type (e.g., "int", "byte", "pointer", a custom struct name)
     #[arg(long = "type")]
     pub field_type: String,
-    /// Offset within the struct (if omitted, appends at end)
-    #[arg(long)]
+    /// Offset within the struct (decimal, 0x-hex, 0b-binary, or 0o-octal; if
+    /// omitted, appends at end)
+    #[arg(long, value_parser = parse_i32_with_radix)]
     pub offset: Option<i32>,
-    /// Field size override
-    #[arg(long)]
+    /// Field size override (decimal, 0x-hex, 0b-binary, or 0o-octal)
+    #[arg(long, value_parser = parse_i32_with_radix)]
     pub size: Option<i32>,
     #[arg(long)]
     pub program: Option<String>,
@@ -1197,6 +1224,34 @@ mod tests {
                 assert_eq!(args.resolved_target(), "main");
             }
             _ => panic!("expected function get command"),
+        }
+    }
+
+    #[test]
+    fn parse_i32_with_radix_accepts_decimal_and_hex() {
+        assert_eq!(parse_i32_with_radix("16").unwrap(), 16);
+        assert_eq!(parse_i32_with_radix("-4").unwrap(), -4);
+        assert_eq!(parse_i32_with_radix("0x10").unwrap(), 16);
+        assert_eq!(parse_i32_with_radix("0X10").unwrap(), 16);
+        assert_eq!(parse_i32_with_radix("-0x10").unwrap(), -16);
+        assert_eq!(parse_i32_with_radix("0b1010").unwrap(), 10);
+        assert_eq!(parse_i32_with_radix("0o20").unwrap(), 16);
+        assert!(parse_i32_with_radix("0xZZ").is_err());
+        assert!(parse_i32_with_radix("").is_err());
+    }
+
+    #[test]
+    fn type_add_field_accepts_hex_offset() {
+        let cli = Cli::try_parse_from([
+            "ghidra", "type", "add-field", "MyStruct",
+            "--name", "x", "--type", "int", "--offset", "0x10",
+        ])
+        .expect("hex --offset should parse");
+        match cli.command {
+            Commands::Type(TypeCommands::AddField(args)) => {
+                assert_eq!(args.offset, Some(16));
+            }
+            _ => panic!("expected type add-field command"),
         }
     }
 }

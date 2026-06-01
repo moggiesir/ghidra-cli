@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `save_program` bridge command persists pending edits without switching programs or analyzing
   - `ghidra stop` now saves the current program before shutting the bridge down
   - `ghidra batch <file>` saves the current program after the last command runs (previously edits only made it to disk on `analyze` or program-switch)
+- **Ergonomic parsing**:
+  - `type add-field --offset` / `--size` accept hex (`0x10`), binary (`0b10000`), and octal (`0o20`) in addition to decimal
+  - `resolveDataType` now falls through to `BuiltInDataTypeManager`, so primitive aliases (`short`, `long`, `byte`, `int8`/`16`/`32`/`64`, etc.) resolve even when the program DTM hasn't seen them yet
 - **Type system enhancements**:
   - `type delete` / `type rename` - CRUD completion for data types
   - `type create-enum` - Create enum types with `--values "KEY=VAL,..."` and `--size`
