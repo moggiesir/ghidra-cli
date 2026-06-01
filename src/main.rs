@@ -998,8 +998,10 @@ fn execute_via_bridge(
 
             let mut results = Vec::new();
             for line in &lines {
+                let parsed = shlex::split(line)
+                    .ok_or_else(|| anyhow::anyhow!("Invalid quoting in batch line: {}", line))?;
                 let words: Vec<&str> = std::iter::once("ghidra")
-                    .chain(line.split_whitespace())
+                    .chain(parsed.iter().map(|s| s.as_str()))
                     .collect();
                 let sub_result = match Cli::try_parse_from(&words) {
                     Ok(sub_cli) => {
