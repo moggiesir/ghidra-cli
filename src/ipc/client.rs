@@ -342,7 +342,7 @@ impl BridgeClient {
             Some(json!({
                 "address": address,
                 "text": text,
-                "type": comment_type,
+                "comment_type": comment_type,
             })),
         )
     }
