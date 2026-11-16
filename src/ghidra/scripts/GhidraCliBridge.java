@@ -68,6 +68,16 @@ public class GhidraCliBridge extends GhidraScript {
     @Override
     public void run() throws Exception {
         startTime = System.currentTimeMillis();
+        // GhidraScript.executeNormal() wraps run() in one transaction. This
+        // bridge runs for its whole lifetime inside run(), so every handler's
+        // transaction would be nested in it. Ghidra marks the whole transaction
+        // ABORTED if any nested one ends with commit=false. A single failed
+        // command would then roll back every edit of the session at exit,
+        // even though headless reports "Save succeeded". It would also make
+        // saveCurrentProgram() fail ("Unable to lock due to active
+        // transaction"). Close the script transaction now so each handler's
+        // transaction is top-level and independent.
+        end(true);
         // Get port file path from script arguments
         String[] scriptArgs = getScriptArgs();
         if (scriptArgs.length < 1) {
